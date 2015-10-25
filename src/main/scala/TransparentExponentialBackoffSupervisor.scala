@@ -9,6 +9,25 @@ object TransparentExponentialBackoffSupervisor {
   private case object RestartChild
   private case class ResetRestartCount(lastNumRestarts: Int)
 
+  /**
+   * Props for creating a [[TransparentExponentialBackoffSupervisor]] with a decider.
+   *
+   * @param childProps the [[akka.actor.Props]] of the child to be supervised.
+   * @param minBackoff the min time before the child is restarted.
+   * @param maxBackoff the max time (upperbound) for a child restart.
+   * @param randomFactor a random delay factor to add on top of the calculated exponential
+   *   back off.
+   *   The calculation is equivalent to:
+   *   {{{
+   *     final_delay = min(
+   *       maxBackoff,
+   *       (random_delay_factor * calculated_backoff) + calculated_backoff)
+   *   }}}
+   * @param decider an [[akka.actor.SupervisorStrategy.Decider]] to specify how the supervisor
+   *   should behave for different exceptions. If no cases are matched, the default decider of
+   *   [[akka.actor.Actor]] is used. When the [[akka.actor.SupervisorStrategy.Restart]] directive
+   *   is returned by the decider, this supervisor will apply an exponential back off restart.
+   */
   def propsWithDecider(
     childProps: Props,
     minBackoff: FiniteDuration,
@@ -23,6 +42,22 @@ object TransparentExponentialBackoffSupervisor {
       randomFactor)
   }
 
+  /**
+   * Props for creating a [[TransparentExponentialBackoffSupervisor]] using the
+   * default [[akka.actor.Actor]] decider.
+   *
+   * @param childProps the [[akka.actor.Props]] of the child to be supervised.
+   * @param minBackoff the min time before the child is restarted.
+   * @param maxBackoff the max time (upperbound) for a child restart.
+   * @param randomFactor a random delay factor to add on top of the calculated exponential
+   *   back off.
+   *   The calculation is equivalent to:
+   *   {{{
+   *     final_delay = min(
+   *       maxBackoff,
+   *       (random_delay_factor * calculated_backoff) + calculated_backoff)
+   *   }}}
+   */
   def props(
     childProps: Props,
     minBackoff: FiniteDuration,
@@ -38,6 +73,33 @@ object TransparentExponentialBackoffSupervisor {
   }
 }
 
+/**
+ * A supervising actor that restarts a child actor with an exponential back off.
+ *
+ * This explicit supervisor behaves similarly to the normal implicit supervision where
+ * if an actor throws an exception, the decider on the supervisor will decide when to
+ * `Stop`, `Restart`, `Escalate`, `Resume` the child actor.
+ *
+ * When the `Restart` directive is specified, the supervisor will delay the restart
+ * using an exponential back off strategy (bounded by minBackoff and maxBackoff).
+ *
+ * This supervisor is intended to be transparent to both the child actor and external actors.
+ * Where external actors can send messages to the supervisor as if it was the child and the
+ * messages will be forwarded. And when the child is `Terminated`, the supervisor is also
+ * `Terminated`.
+ * Transparent to the child means that the child does not have to be aware that it is being
+ * supervised specifically by the [[TransparentExponentialBackoffSupervisor]]. Just like it does
+ * not need to know when it is being supervised by the usual implicit supervisors.
+ * The only caveat is that the `ActorRef` of the child is not stable, so any user storing the
+ * `sender()` `ActorRef` from the child response may eventually not be able to communicate with
+ * the stored `ActorRef`. In general all messages to the child should be directed through the
+ * [[TransparentExponentialBackoffSupervisor]].
+ *
+ * An example of where this supervisor might be used is when you may have an actor that is
+ * responsible for continuously polling on a server for some resource that sometimes may be down.
+ * Instead of hammering the server continuously when the resource is unavailable, the actor will
+ * be restarted with an exponentially increasing back off until the resource is available again.
+ */
 class TransparentExponentialBackoffSupervisor(
   props: Props,
   decider: Option[Decider],

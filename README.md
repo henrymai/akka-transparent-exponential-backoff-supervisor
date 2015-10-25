@@ -77,6 +77,3 @@ supervisor ! "kill"
 Try spamming the messages and observe that the counter increments and that the restart delay increases exponentially.
 
 When the spamming stops, the counter will eventually reset to 0.
-
-## TODO
-- Add scaladoc documentation
