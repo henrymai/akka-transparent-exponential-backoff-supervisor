@@ -13,6 +13,21 @@ http://doc.akka.io/api/akka/2.4.0/index.html#akka.pattern.BackoffSupervisor
 
 https://github.com/akka/akka/blob/v2.4.0/akka-actor-tests/src/test/scala/akka/pattern/BackoffSupervisorSpec.scala
 
+## Integration with your sbt project
+You can make your projects depend on this git project.
+For example:
+```scala
+lazy val root = Project("root", file(".")) dependsOn transparentBackoffSupervisorProject
+lazy val transparentBackoffSupervisorProject =
+  RootProject(uri("https://github.com/henrymai/akka-transparent-exponential-backoff-supervisor.git#master"))
+```
+For more details: https://www.safaribooksonline.com/library/view/scala-cookbook/9781449340292/ch18s11.html
+
+Then in your code, you can simply:
+```scala
+import akka.pattern.TransparentExponentialBackoffSupervisor
+```
+
 ## Example usage
 **:paste** the following blocks into into **sbt console** to try it out.
 
