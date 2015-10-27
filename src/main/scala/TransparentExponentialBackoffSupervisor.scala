@@ -6,7 +6,8 @@ import akka.actor.SupervisorStrategy._
 import scala.concurrent.duration._
 
 object TransparentExponentialBackoffSupervisor {
-  private case object RestartChild
+  private case class ScheduleRestart(childRef: ActorRef)
+  private case object StartChild
   private case class ResetRestartCount(lastNumRestarts: Int)
 
   /**
@@ -126,29 +127,48 @@ class TransparentExponentialBackoffSupervisor(
       // to our own Restarts, which involves stopping the child.
       maybeDirective.getOrElse(defaultDirective) match {
         case Restart =>
-          self ! RestartChild
+          val childRef = sender
+          become({
+            case Terminated(`childRef`) =>
+              unwatch(childRef)
+              unbecome()
+              self ! ScheduleRestart(childRef)
+            case Terminated(other) =>
+              log.debug(s"Received unexpected Terminated message from: $other")
+            case _ =>
+              stash()
+          }, discardOld = false)
           Stop
         case other => other
       }
   }
 
   // Initialize by starting up and watching the child
-  self ! RestartChild
+  self ! StartChild
 
-  def receive = {
-    case RestartChild =>
+  def receive = waitingToStart(-1, false)
+
+  def waitingToStart(numRestarts: Int, scheduleCounterReset: Boolean): Receive = {
+    case StartChild =>
       val childRef = actorOf(props)
       watch(childRef)
       unstashAll()
-      become(watching(childRef, 0))
+      if (scheduleCounterReset) {
+        system.scheduler.scheduleOnce(minBackoff, self, ResetRestartCount(numRestarts + 1))
+      }
+      become(watching(childRef, numRestarts + 1))
     case _ => stash()
   }
 
   // Steady state
   def watching(childRef: ActorRef, numRestarts: Int): Receive = {
-    case RestartChild =>
-      log.debug("Waiting on child termination to restart")
-      become(waitingToRestart(childRef, numRestarts))
+    case ScheduleRestart(`childRef`) =>
+      val delay = calculateDelay(numRestarts)
+      system.scheduler.scheduleOnce(delay, self, StartChild)
+      become(waitingToStart(numRestarts, true))
+      log.info(s"Restarting child in: $delay; numRestarts: $numRestarts")
+    case ScheduleRestart(other) =>
+      log.debug(s"Ignoring unexpected ScheduleRestart message from: $other")
     case ResetRestartCount(last) =>
       if (last == numRestarts) {
         log.debug(s"Last restart count [$last] matches current count; resetting")
@@ -178,25 +198,5 @@ class TransparentExponentialBackoffSupervisor(
         case f: FiniteDuration => f
         case _                 => maxBackoff
       }
-  }
-
-  // Waiting to restart the child state
-  def waitingToRestart(oldChildRef: ActorRef, numRestarts: Int): Receive = {
-    case Terminated(`oldChildRef`) =>
-      unwatch(oldChildRef)
-      val delay = calculateDelay(numRestarts)
-      system.scheduler.scheduleOnce(delay, self, RestartChild)
-      log.info(s"Restarting child in: $delay; numRestarts: $numRestarts")
-    case Terminated(other) =>
-      log.debug(s"Received unexpected Terminated message from: $other")
-    case RestartChild =>
-      val childRef = actorOf(props)
-      watch(childRef)
-      unstashAll()
-      system.scheduler.scheduleOnce(minBackoff, self, ResetRestartCount(numRestarts + 1))
-      become(watching(childRef, numRestarts + 1))
-      log.debug(s"Restarted child; numRestarts: $numRestarts")
-    case _ =>
-      stash()
   }
 }
