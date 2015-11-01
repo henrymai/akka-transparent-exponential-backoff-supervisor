@@ -182,6 +182,8 @@ class TransparentExponentialBackoffSupervisor(
     case Terminated(`childRef`) =>
       log.debug(s"Terminating, because child [$childRef] terminated itself")
       stop(self)
+    case msg if sender() == childRef =>
+      parent.forward(msg)
     case msg =>
       childRef.forward(msg)
   }

@@ -9,8 +9,7 @@ import scala.language.postfixOps
 
 object TestActor {
   class StoppingException extends Exception("stopping exception")
-  def props(probe: ActorRef) =
-    Props(classOf[TestActor], probe)
+  def props(probe: ActorRef): Props = Props(classOf[TestActor], probe)
 }
 
 class TestActor(probe: ActorRef) extends Actor {
@@ -22,22 +21,44 @@ class TestActor(probe: ActorRef) extends Actor {
     case "DIE" => context.stop(self)
     case "THROW" => throw new Exception("normal exception")
     case "THROW_STOPPING_EXCEPTION" => throw new TestActor.StoppingException
+    case ("TO_PARENT", msg) => context.parent ! msg
     case other => probe ! other
+  }
+}
+
+object TestParentActor {
+  def props(probe: ActorRef, supervisorProps: Props): Props =
+    Props(new TestParentActor(probe, supervisorProps))
+}
+class TestParentActor(probe: ActorRef, supervisorProps: Props) extends Actor {
+  val supervisor = context.actorOf(supervisorProps)
+
+  def receive = {
+    case other => probe.forward(other)
   }
 }
 
 class TransparentExponentialBackoffSupervisorSpec extends AkkaSpec {
 
+  def supervisorProps(probeRef: ActorRef) = TransparentExponentialBackoffSupervisor.propsWithDecider(
+    TestActor.props(probeRef),
+    200 millis,
+    10 seconds,
+    0.0) {
+      case _: TestActor.StoppingException => SupervisorStrategy.Stop
+    }
+
   trait Setup {
     val probe = TestProbe()
-    val supervisor = system.actorOf(TransparentExponentialBackoffSupervisor.propsWithDecider(
-      TestActor.props(probe.ref),
-      200 millis,
-      10 seconds,
-      0.0) {
-        case _: TestActor.StoppingException => SupervisorStrategy.Stop
-      })
+    val supervisor = system.actorOf(supervisorProps(probe.ref))
     probe.expectMsg("STARTED")
+  }
+
+  trait Setup2 {
+    val probe = TestProbe()
+    val parent = system.actorOf(TestParentActor.props(probe.ref, supervisorProps(probe.ref)))
+    probe.expectMsg("STARTED")
+    val child = probe.lastSender
   }
 
   "TransparentExponentialBackoffSupervisor" must {
@@ -83,6 +104,11 @@ class TransparentExponentialBackoffSupervisorSpec extends AkkaSpec {
       // subsequently stop itself.
       supervisor ! "THROW_STOPPING_EXCEPTION"
       probe.expectTerminated(supervisor)
+    }
+
+    "forward messages from the child to the parent of the supervisor" in new Setup2 {
+      child ! ("TO_PARENT", "TEST_MESSAGE")
+      probe.expectMsg("TEST_MESSAGE")
     }
   }
 }

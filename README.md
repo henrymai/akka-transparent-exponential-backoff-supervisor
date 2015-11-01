@@ -57,6 +57,11 @@ class A extends Actor {
     case "poisonpill" =>
       println("******** Received poisonpill **********")
       self ! PoisonPill
+    // This will send a message to the supervisor, which is expected to forward
+    // the message the supervisor's parent.
+    case "sendmsgtoparent" =>
+      println("******** Received sendmsgtoparent ********")
+      context.parent ! "msgtoparent"
     // Throw an exception; the decider should decide what to do.
     case other =>
       println(s"******** Received: $other ***********")
