@@ -6,9 +6,9 @@ import akka.actor.SupervisorStrategy._
 import scala.concurrent.duration._
 
 object TransparentExponentialBackoffSupervisor {
-  private case class ScheduleRestart(childRef: ActorRef)
-  private case object StartChild
-  private case class ResetRestartCount(lastNumRestarts: Int)
+  private case class ScheduleRestart(childRef: ActorRef) extends DeadLetterSuppression
+  private case object StartChild extends DeadLetterSuppression
+  private case class ResetRestartCount(lastNumRestarts: Int) extends DeadLetterSuppression
 
   /**
    * Props for creating a [[TransparentExponentialBackoffSupervisor]] with a decider.
@@ -35,12 +35,12 @@ object TransparentExponentialBackoffSupervisor {
     maxBackoff: FiniteDuration,
     randomFactor: Double)(decider: Decider): Props = {
     Props(
-      classOf[TransparentExponentialBackoffSupervisor],
-      childProps,
-      Some(decider),
-      minBackoff,
-      maxBackoff,
-      randomFactor)
+      new TransparentExponentialBackoffSupervisor(
+        childProps,
+        Some(decider),
+        minBackoff,
+        maxBackoff,
+        randomFactor))
   }
 
   /**
@@ -65,12 +65,12 @@ object TransparentExponentialBackoffSupervisor {
     maxBackoff: FiniteDuration,
     randomFactor: Double): Props = {
     Props(
-      classOf[TransparentExponentialBackoffSupervisor],
-      childProps,
-      None,
-      minBackoff,
-      maxBackoff,
-      randomFactor)
+      new TransparentExponentialBackoffSupervisor(
+        childProps,
+        None,
+        minBackoff,
+        maxBackoff,
+        randomFactor))
   }
 }
 
@@ -100,6 +100,14 @@ object TransparentExponentialBackoffSupervisor {
  * responsible for continuously polling on a server for some resource that sometimes may be down.
  * Instead of hammering the server continuously when the resource is unavailable, the actor will
  * be restarted with an exponentially increasing back off until the resource is available again.
+ *
+ * '''***
+ * This supervisor should not be used with `Akka Persistence` child actors.
+ * `Akka Persistence` actors, currently, shutdown unconditionally on `persistFailure()`s rather
+ * than throw an exception on a failure like normal actors.
+ * [[akka.pattern.BackoffSupervisor]] should be used instead for cases where the child actor
+ * terminates itself as a failure signal instead of the normal behavior of throwing an exception.
+ * ***'''
  */
 class TransparentExponentialBackoffSupervisor(
   props: Props,
@@ -114,7 +122,7 @@ class TransparentExponentialBackoffSupervisor(
   import TransparentExponentialBackoffSupervisor._
   import context._
 
-  override val supervisorStrategy = OneForOneStrategy(maxNrOfRetries = -1) {
+  override val supervisorStrategy = OneForOneStrategy() {
     case ex =>
       val defaultDirective: Directive =
         super.supervisorStrategy.decider.applyOrElse(ex, (_: Any) => Escalate)
@@ -130,11 +138,8 @@ class TransparentExponentialBackoffSupervisor(
           val childRef = sender
           become({
             case Terminated(`childRef`) =>
-              unwatch(childRef)
               unbecome()
               self ! ScheduleRestart(childRef)
-            case Terminated(other) =>
-              log.debug(s"Received unexpected Terminated message from: $other")
             case _ =>
               stash()
           }, discardOld = false)
@@ -167,8 +172,6 @@ class TransparentExponentialBackoffSupervisor(
       system.scheduler.scheduleOnce(delay, self, StartChild)
       become(waitingToStart(numRestarts, true))
       log.info(s"Restarting child in: $delay; numRestarts: $numRestarts")
-    case ScheduleRestart(other) =>
-      log.debug(s"Ignoring unexpected ScheduleRestart message from: $other")
     case ResetRestartCount(last) =>
       if (last == numRestarts) {
         log.debug(s"Last restart count [$last] matches current count; resetting")
@@ -179,8 +182,6 @@ class TransparentExponentialBackoffSupervisor(
     case Terminated(`childRef`) =>
       log.debug(s"Terminating, because child [$childRef] terminated itself")
       stop(self)
-    case Terminated(other) =>
-      log.debug(s"Ignoring unexpected Terminated message from: $other")
     case msg =>
       childRef.forward(msg)
   }
