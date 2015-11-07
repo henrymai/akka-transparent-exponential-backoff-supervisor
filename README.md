@@ -13,6 +13,10 @@ http://doc.akka.io/api/akka/2.4.0/index.html#akka.pattern.BackoffSupervisor
 
 https://github.com/akka/akka/blob/v2.4.0/akka-actor-tests/src/test/scala/akka/pattern/BackoffSupervisorSpec.scala
 
+**The TransparentExponentialBackoffSupervisor has been merged into akka: https://github.com/akka/akka/commit/61c257b2fe83afdd0bfef20bbd8dff6362fd8ee0**
+
+**This standalone project is discontinued**
+
 ## Integration with your sbt project
 You can make your projects depend on this git project.
 For example:
